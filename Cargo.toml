@@ -1,0 +1,27 @@
+[package]
+name = "non-empty-bytes"
+version = "1.0.0"
+authors = ["Alachie Yeager"]
+edition = "2024"
+description = "A crate providing non-empty invariant wrappers to the bytes crate"
+repository = "https://github.com/Rtificer/non-empty-bytes"
+license = "GPL-3.0-or-later"
+keywords = ["bytes", "invariant", "non-empty", "zero-copy"]
+rust-version = "1.85"
+
+[features]
+default = ["std"]
+std = ["bytes/std", "serde?/std"]
+serde = ["dep:serde", "bytes/serde"]
+# optional passthrough for targets without native atomics (e.g. thumbv6m)
+extra-platforms = ["bytes/extra-platforms"]
+
+[dependencies]
+bytes = { version = "1.12", default-features = false }
+serde = { version = "1.0", optional = true, default-features = false, features = [
+  "alloc",
+] }
+
+[dev-dependencies]
+serde_json = "1.0"
+serde_test = "1.0"
