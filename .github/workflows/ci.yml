@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: default,                      args: "" }
+          - { name: no-default,                   args: "--no-default-features" }
+          - { name: serde,                        args: "--features serde" }
+          - { name: no-default+serde,             args: "--no-default-features --features serde" }
+          - { name: extra-platforms,              args: "--features extra-platforms" }
+          - { name: no-default+extra-platforms,   args: "--no-default-features --features extra-platforms" }
+          - { name: all-features,                 args: "--all-features" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test ${{ matrix.args }}
+      - name: Check docs
+        run: cargo doc --no-deps ${{ matrix.args }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  miri:
+    name: miri (${{ matrix.target }}, ${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 64-bit host: every feature combination
+          - { target: x86_64-unknown-linux-gnu, name: default,                    args: "" }
+          - { target: x86_64-unknown-linux-gnu, name: no-default,                 args: "--no-default-features" }
+          - { target: x86_64-unknown-linux-gnu, name: serde,                      args: "--features serde" }
+          - { target: x86_64-unknown-linux-gnu, name: no-default+serde,           args: "--no-default-features --features serde" }
+          - { target: x86_64-unknown-linux-gnu, name: extra-platforms,            args: "--features extra-platforms" }
+          - { target: x86_64-unknown-linux-gnu, name: no-default+extra-platforms, args: "--no-default-features --features extra-platforms" }
+          - { target: x86_64-unknown-linux-gnu, name: all-features,               args: "--all-features" }
+          # 32-bit: catches pointer-width and usize-size issues in the unsafe code
+          - { target: i686-unknown-linux-gnu,   name: default,                    args: "" }
+          - { target: i686-unknown-linux-gnu,   name: no-default,                 args: "--no-default-features" }
+          - { target: i686-unknown-linux-gnu,   name: all-features,               args: "--all-features" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+      - name: Miri
+        run: cargo miri test --target ${{ matrix.target }} ${{ matrix.args }}
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-features --all-targets -- -D warnings
+
+  no-std:
+    name: no_std (${{ matrix.target }}, ${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Targets with native atomics
+          - { target: thumbv7m-none-eabi, name: no-default,            args: "--no-default-features",                                 rustflags: "" }
+          - { target: thumbv7m-none-eabi, name: serde,                 args: "--no-default-features --features serde",                rustflags: "" }
+          - { target: thumbv7m-none-eabi, name: extra-platforms,       args: "--no-default-features --features extra-platforms",      rustflags: "" }
+          - { target: thumbv7m-none-eabi, name: serde+extra-platforms, args: "--no-default-features --features serde,extra-platforms", rustflags: "" }
+          # Targets without native atomics (require extra-platforms)
+          - { target: thumbv6m-none-eabi, name: extra-platforms,       args: "--no-default-features --features extra-platforms",      rustflags: "--cfg portable_atomic_unsafe_assume_single_core" }
+          - { target: thumbv6m-none-eabi, name: serde+extra-platforms, args: "--no-default-features --features serde,extra-platforms", rustflags: "--cfg portable_atomic_unsafe_assume_single_core" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --target ${{ matrix.target }} ${{ matrix.args }}
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+      # No --all-targets: tests need std and can't build on bare-metal targets
+      - name: Clippy
+        run: cargo clippy --target ${{ matrix.target }} ${{ matrix.args }} -- -D warnings
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
