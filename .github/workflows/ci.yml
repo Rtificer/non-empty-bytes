@@ -1,0 +1,238 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly run to catch breakage from new toolchains, new dependency
+    # releases and new security advisories.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo doc
+        run: cargo doc --no-deps --no-default-features --features "std,serde"
+
+  # Clippy on the host. Covers every combination of {std, serde}; the host has
+  # native atomics, so `extra-platforms` is left to the bare-metal jobs below.
+  # `--no-default-features` is always passed so that `std` is only on when listed.
+  clippy-host:
+    name: clippy (host) [${{ matrix.features || 'no features' }}]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""
+          - "std"
+          - "serde"
+          - "std,serde"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy-host-${{ matrix.features }}
+      - name: cargo clippy
+        run: >
+          cargo clippy --all-targets --no-default-features
+          --features "${{ matrix.features }}"
+          -- -D warnings
+
+  # Clippy on bare-metal targets: proves the crate really is `no_std`
+  # (the host always has std available, so it can't catch accidental std use).
+  # `--lib` only, since dev-dependencies (serde_json etc.) need std.
+  clippy-no-std:
+    name: clippy (${{ matrix.target }}) [${{ matrix.features || 'no features' }}]
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Has native atomics (CAS), so `bytes` works without extra-platforms.
+          - { target: thumbv7m-none-eabi, features: "" }
+          - { target: thumbv7m-none-eabi, features: "serde" }
+          - { target: thumbv7m-none-eabi, features: "extra-platforms" }
+          - { target: thumbv7m-none-eabi, features: "serde,extra-platforms" }
+          # No native CAS atomics: extra-platforms is required. Clippy only
+          # type-checks, so assuming single-core is fine for portable-atomic.
+          - target: thumbv6m-none-eabi
+            features: "extra-platforms"
+            rustflags: "--cfg portable_atomic_unsafe_assume_single_core"
+          - target: thumbv6m-none-eabi
+            features: "serde,extra-platforms"
+            rustflags: "--cfg portable_atomic_unsafe_assume_single_core"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy-${{ matrix.target }}-${{ matrix.features }}
+      - name: cargo clippy
+        run: >
+          cargo clippy --lib --target ${{ matrix.target }} --no-default-features
+          --features "${{ matrix.features }}"
+          -- -D warnings
+
+  # Regular (fast) test run on the host, including doctests.
+  test:
+    name: test [${{ matrix.features || 'no features' }}]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""
+          - "std"
+          - "serde"
+          - "std,serde"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-${{ matrix.features }}
+      - name: cargo test
+        run: >
+          cargo test --no-default-features
+          --features "${{ matrix.features }}"
+
+  # Verify the declared `rust-version` in Cargo.toml. `--lib` so that newer
+  # dev-dependencies can't raise the effective MSRV of this check.
+  msrv:
+    name: msrv 1.85 [${{ matrix.features || 'no features' }}]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""
+          - "std"
+          - "serde"
+          - "std,serde"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-${{ matrix.features }}
+      - name: cargo check
+        run: >
+          cargo check --lib --no-default-features
+          --features "${{ matrix.features }}"
+
+  # Miri runs the tests under the interpreter, which needs std, so only the
+  # combinations with the `std` feature are covered here. s390x is big-endian,
+  # which catches endianness bugs. Several seeds shake out address/thread-order
+  # dependent behaviour.
+  miri:
+    name: miri (${{ matrix.target }}) [${{ matrix.features }}]
+    runs-on: ubuntu-latest
+    env:
+      MIRIFLAGS: -Zmiri-strict-provenance -Zmiri-symbolic-alignment-check -Zmiri-many-seeds=0..8
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - s390x-unknown-linux-gnu
+        features:
+          - "std"
+          - "std,serde"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: miri-${{ matrix.target }}-${{ matrix.features }}
+      - name: cargo miri setup
+        run: cargo miri setup --target ${{ matrix.target }}
+      - name: cargo miri test
+        run: >
+          cargo miri test --target ${{ matrix.target }} --no-default-features
+          --features "${{ matrix.features }}"
+
+  # Compares the public API against the latest crates.io release.
+  # Requires the crate to already be published, so this is disabled until then.
+  # When enabling, also add `semver-checks` back to the `needs` of `ci-success`.
+  # semver-checks:
+  #   name: semver-checks
+  #   if: github.event_name == 'pull_request'
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - uses: obi1kenobi/cargo-semver-checks-action@v2
+
+  # Known-vulnerability scan of the resolved dependency tree.
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      # Libraries usually don't commit Cargo.lock, but audit needs one.
+      - run: cargo generate-lockfile
+      - run: cargo audit
+
+  # Single required check for branch protection.
+  ci-success:
+    name: CI success
+    if: always()
+    needs:
+      - fmt
+      - docs
+      - clippy-host
+      - clippy-no-std
+      - test
+      - msrv
+      - miri
+      # - semver-checks
+      - audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "One or more jobs failed"
+            exit 1
+          fi

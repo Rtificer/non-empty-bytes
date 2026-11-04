@@ -3,8 +3,6 @@
 [![Crates.io](https://img.shields.io/crates/v/non-empty-bytes.svg)](https://crates.io/crates/non-empty-bytes)
 [![Docs.rs](https://img.shields.io/docsrs/non-empty-bytes)](https://docs.rs/non-empty-bytes)
 [![Build status](https://github.com/Rtificer/non-empty-bytes/actions/workflows/ci.yml/badge.svg)](https://github.com/Rtificer/non-empty-bytes/actions/workflows/ci.yml)
-[![License](https://img.shields.io/crates/l/non-empty-bytes.svg)](#license)
-[![Downloads](https://img.shields.io/crates/d/non-empty-bytes.svg)](https://crates.io/crates/non-empty-bytes)
 
 Byte buffers that are statically guaranteed to contain at least one byte.
 
