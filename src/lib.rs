@@ -116,6 +116,8 @@ mod non_empty_bytes_mut;
 pub use non_empty_bytes::NonEmptyBytes;
 pub use non_empty_bytes_mut::NonEmptyBytesMut;
 
+pub use bytes::{Bytes, BytesMut};
+
 /// The error returned when a [`NonEmptyBytes`] or [`NonEmptyBytesMut`] is requested from
 /// input that contains no bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
